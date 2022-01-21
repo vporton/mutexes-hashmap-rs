@@ -1,6 +1,7 @@
+use std::cell::{Cell, RefCell};
 use std::collections::hash_map::Entry;
 use std::hash::Hash;
-use std::sync::{Arc, LockResult, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 use std::collections::HashMap;
 
 // TODO: (Low priority) Support other random states S.
@@ -8,7 +9,7 @@ pub struct MutexesMap<K>
 where
     K: Hash + Eq, 
 {
-    pub(crate) base: Arc<Mutex<HashMap<K, Mutex<()>>>>,
+    pub(crate) base: Arc<Mutex<HashMap<K, Arc<Mutex<()>>>>>,
 }
 
 pub struct MutexesMapGuard<'a, K>
@@ -16,7 +17,7 @@ where
     K: Hash + Eq, 
 {
     map: &'a MutexesMap<K>,
-    guard: MutexGuard<'a, ()>,
+    guard: RefCell<Option<&'a MutexGuard<'a, ()>>>,
     key: K
 }
 
@@ -29,20 +30,22 @@ where
             base: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    pub fn lock(&self, key: K) -> LockResult<MutexesMapGuard<'_, K>> {
+    pub fn lock<'a>(&self, key: K) -> LockResult<MutexesMapGuard<'a, K>> {
         let mut this = self.base.lock().unwrap();
 
         let inner_guard = match this.entry(key) {
-            Entry::Occupied(m) => m.into_mut().lock().unwrap(),
+            Entry::Occupied(m) => {
+                &m.into_mut().lock().unwrap()
+            },
             Entry::Vacant(v) => {
                 let m = Mutex::new(());
-                v.insert(m).lock().unwrap()    
+                &v.insert(Arc::new(m)).lock().unwrap()    
             }
         };
     
         Ok(MutexesMapGuard {
             map: &self,
-            guard: inner_guard,
+            guard: RefCell::new(Some(inner_guard)),
             key,
         })
         // let guard = inner_mutex.lock();
@@ -75,7 +78,7 @@ where
     K: Hash + Eq, 
 {
     fn from(guard: MutexesMapGuard<'a, K>) -> Self {
-        guard.guard
+        guard.guard.take().unwrap() // FIXME: unwrap()
     }
 }
 
