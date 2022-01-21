@@ -1,39 +1,91 @@
-use std::sync::{Arc, LockResult, Mutex, MutexGuard};
+use std::collections::hash_map::Entry;
+use std::hash::Hash;
+use std::sync::{Arc, LockResult, Mutex, MutexGuard, PoisonError};
 use std::collections::HashMap;
 
-pub struct MutexesMap<K, V, S = std::collections::hash_map::RandomState> {
-    base: Arc<Mutex<HashMap<K, V, S>>>,
+// TODO: (Low priority) Support other random states S.
+pub struct MutexesMap<K>
+where
+    K: Hash + Eq, 
+{
+    pub(crate) base: Arc<Mutex<HashMap<K, Mutex<()>>>>,
 }
 
-pub struct MutexesMapGuard<'a, K, V, S = std::collections::hash_map::RandomState> {
-    base: MutexGuard<'a, V>,
+pub struct MutexesMapGuard<'a, K>
+where
+    K: Hash + Eq, 
+{
+    map: &'a MutexesMap<K>,
+    guard: MutexGuard<'a, ()>,
+    key: K
 }
 
-impl<K, V, S> MutexesMap<K, V, S> {
-    pub fn new() {
+impl<K> MutexesMap<K>
+where
+    K: Hash + Eq + Copy, 
+{
+    pub fn new() -> Self {
         Self {
             base: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    pub fn lock(&self, key: K) -> LockResult<MutexGuard<'_, V>> {
-        let this = self.lock().unwrap();
+    pub fn lock(&self, key: K) -> LockResult<MutexesMapGuard<'_, K>> {
+        let mut this = self.base.lock().unwrap();
 
-        if let Some(m) = this.base.get(key) {
-            m.lock().unwrap();
-            m.clone()
-        } else {
-            let m = Arc::new(Mutex::new(()));
-            this.base.insert(key, m.clone());
-            m.clone()
-        }
+        let inner_guard = match this.entry(key) {
+            Entry::Occupied(m) => m.into_mut().lock().unwrap(),
+            Entry::Vacant(v) => {
+                let m = Mutex::new(());
+                v.insert(m).lock().unwrap()    
+            }
+        };
+    
+        Ok(MutexesMapGuard {
+            map: &self,
+            guard: inner_guard,
+            key,
+        })
+        // let guard = inner_mutex.lock();
+        // match *inner_guard {
+        //     Ok(guard) => Ok(MutexesMapGuard {
+        //         map: &self,
+        //         guard: guard,
+        //         key,
+        //     }),
+        //     Err(e) => Err(PoisonError::new(MutexesMapGuard {
+        //         map: &self,
+        //         guard: e.into_inner(),
+        //         key,
+        //     })),
+        // }
+        
     }
     // TODO: try_lock()
 }
 
-impl<'a, K, V, S> MutexesMapGuard<'a, K, V, S> {
-    // type Target = V; // TODO
+impl<'a, K> MutexesMapGuard<'a, K>
+where
+    K: Hash + Eq, 
+{
+    // type Target = (); // TODO
 }
 
-impl<'a, K, V, S> From<MutexesMapGuard<'a, K, V, S>> for MutexGuard<'a, V> {
+impl<'a, K> From<MutexesMapGuard<'a, K>> for MutexGuard<'a, ()>
+where
+    K: Hash + Eq, 
+{
+    fn from(guard: MutexesMapGuard<'a, K>) -> Self {
+        guard.guard
+    }
+}
 
+impl<'a, K> Drop for MutexesMapGuard<'a, K>
+where
+    K: Hash + Eq, 
+{
+    fn drop(&mut self) {
+        // let mut this = self.lock().unwrap();
+        self.map.base.lock().unwrap().remove(&self.key);
+        // Here inner guard drops.
+    }
 }
