@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::collections::btree_map::OccupiedEntry;
 use std::collections::hash_map::Entry;
 use std::hash::Hash;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
@@ -17,7 +17,7 @@ where
     K: Hash + Eq, 
 {
     map: &'a MutexesMap<K>,
-    guard: RefCell<Option<&'a MutexGuard<'a, ()>>>,
+    guard: &'a MutexGuard<'a, ()>,
     key: K
 }
 
@@ -30,22 +30,16 @@ where
             base: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    pub fn lock<'a>(&self, key: K) -> LockResult<MutexesMapGuard<'a, K>> {
-        let mut this = self.base.lock().unwrap();
+    pub fn lock<'a>(&'a self, key: K) -> LockResult<&'a MutexesMapGuard<'a, K>> {
+        let this: &'a _ = &self.base;//.clone().lock().unwrap();
+        let this: &'a _ = &this.lock().unwrap();
 
-        let inner_guard = match this.entry(key) {
-            Entry::Occupied(m) => {
-                &m.into_mut().lock().unwrap()
-            },
-            Entry::Vacant(v) => {
-                let m = Mutex::new(());
-                &v.insert(Arc::new(m)).lock().unwrap()    
-            }
-        };
-    
-        Ok(MutexesMapGuard {
+        // let inner_guard = &this.lock().unwrap().entry(key)/*.or_insert(Arc::new(Mutex::new(())))*/.clone().lock().unwrap();
+        let inner_guard = &this.get(&key).unwrap().clone().lock().unwrap();
+
+        Ok(&MutexesMapGuard {
             map: &self,
-            guard: RefCell::new(Some(inner_guard)),
+            guard: inner_guard,
             key,
         })
         // let guard = inner_mutex.lock();
@@ -73,12 +67,12 @@ where
     // type Target = (); // TODO
 }
 
-impl<'a, K> From<MutexesMapGuard<'a, K>> for MutexGuard<'a, ()>
+impl<'a, K> From<MutexesMapGuard<'a, K>> for &'a MutexGuard<'a, ()>
 where
     K: Hash + Eq, 
 {
     fn from(guard: MutexesMapGuard<'a, K>) -> Self {
-        guard.guard.take().unwrap() // FIXME: unwrap()
+        guard.guard // FIXME: unwrap()
     }
 }
 
