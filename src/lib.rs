@@ -1,15 +1,19 @@
+extern crate chashmap;
+
 use std::collections::btree_map::OccupiedEntry;
 use std::collections::hash_map::Entry;
 use std::hash::Hash;
 use std::sync::{Arc, LockResult, Mutex, MutexGuard};
 use std::collections::HashMap;
 
+use chashmap::CHashMap;
+
 // TODO: (Low priority) Support other random states S.
 pub struct MutexesMap<K>
 where
     K: Hash + Eq, 
 {
-    pub(crate) base: Arc<Mutex<HashMap<K, Arc<Mutex<()>>>>>,
+    pub(crate) base: CHashMap<K, Arc<Mutex<()>>>,
 }
 
 pub struct MutexesMapGuard<'a, K>
@@ -27,15 +31,14 @@ where
 {
     pub fn new() -> Self {
         Self {
-            base: Arc::new(Mutex::new(HashMap::new())),
+            base: CHashMap::new(),
         }
     }
-    pub fn lock<'a>(&'a self, key: K) -> LockResult<&'a MutexesMapGuard<'a, K>> {
-        let this: &'a _ = &self.base;//.clone().lock().unwrap();
-        let this: &'a _ = &this.lock().unwrap();
+    pub fn lock(&self, key: K) -> LockResult<&'a MutexesMapGuard<'a, K>> {
+        let this: &'a = &self.base;//.clone().lock().unwrap();
 
         // let inner_guard = &this.lock().unwrap().entry(key)/*.or_insert(Arc::new(Mutex::new(())))*/.clone().lock().unwrap();
-        let inner_guard = &this.get(&key).unwrap().clone().lock().unwrap();
+        let inner_guard = &this.get(&key).unwrap().lock().unwrap();
 
         Ok(&MutexesMapGuard {
             map: &self,
@@ -82,7 +85,7 @@ where
 {
     fn drop(&mut self) {
         // let mut this = self.lock().unwrap();
-        self.map.base.lock().unwrap().remove(&self.key);
+        self.map.base.remove(&self.key);
         // Here inner guard drops.
     }
 }
